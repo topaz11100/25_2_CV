@@ -28,8 +28,8 @@ $$
 원본이미지 $S : \mathbb{R}^2 \rightarrow \text{픽셀 값}$ 이라 하면 아래와 같다
 $$
 P = \begin{bmatrix} p1 & p2 \\\\ p3 & p4 \end{bmatrix}
-= \begin{bmatrix} \begin{bmatrix} floor(x_p) \\\\ floor(y_p) \end{bmatrix} & \begin{bmatrix} 1+floor(x_p) \\\\ floor(y_p) \end{bmatrix} \\\\
-                  \begin{bmatrix} floor(x_p) \\\\ 1+floor(y_p) \end{bmatrix} & \begin{bmatrix} 1+floor(x_p) \\\\ 1+floor(y_p) \end{bmatrix} \end{bmatrix}
+= \begin{bmatrix} S\left(\begin{bmatrix} floor(x_p) \\\\ floor(y_p) \end{bmatrix}\right) & S\left(\begin{bmatrix} 1+floor(x_p) \\\\ floor(y_p) \end{bmatrix}\right) \\\\
+S\left(\begin{bmatrix} floor(x_p) \\\\ 1+floor(y_p) \end{bmatrix}\right) & S\left(\begin{bmatrix} 1+floor(x_p) \\\\ 1+floor(y_p) \end{bmatrix}\right) \end{bmatrix}
 $$
 
 바이리니어 보간법 공식은 아래와 같이 행렬곱으로 변환 가능하다
