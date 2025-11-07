@@ -1,149 +1,144 @@
 // 2.cpp
-// Morphological Processing (grayscale): erosion, dilation, opening, closing
-// Implemented without OpenCV morphology (only I/O).
-// Build: g++ -std=c++17 2.cpp -o morph `pkg-config --cflags --libs opencv4`
-// Usage:
-//   ./morph input.jpg out_prefix op ksize_list
-// Examples:
-//   ./morph lena.png out open 3,5,7
-//   ./morph lena.png out close 5
-// Notes:
-//   - op in {erode, dilate, open, close}
-//   - ksize_list: comma-separated odd integers >=3 (rectangular structuring element)
-// Output files:
-//   out_prefix_{op}_k{K}.png
+// 빌드 예: g++ -std=c++17 2.cpp -o run2 `pkg-config --cflags --libs opencv4`
+// 요구사항: 침식/팽창/오프닝/클로징 직접 구현(이웃 내 min/max). 사각형 구조요소. 크기 증가별 결과 저장.
+// 참고: 슬라이드의 수학적 정의와 "이웃 중 최소/최대값 대체" 설명. :contentReference[oaicite:5]{index=5}
+
 #include <opencv2/opencv.hpp>
-#include <iostream>
-#include <sstream>
+#include <string>
 #include <vector>
-#include <algorithm>
-using namespace cv;
+#include <iostream>
+#include <filesystem>
+
 using namespace std;
+using namespace cv;
 
-static inline uint8_t gray_from_bgr(const Vec3b& bgr)
-{
-// BT.601
-    double Y = 0.114 * bgr[0] + 0.587 * bgr[1] + 0.299 * bgr[2];
-    int v = (int) round(Y);
-    if (v < 0) v = 0; if (v > 255) v = 255;
-    return (uint8_t) v;
-}
+static const string INPUT_PATH_1 = "b1.png";
+static const string INPUT_PATH_2 = "b2.png";
+static const string OUT_DIR = "실행결과/";
 
-static Mat to_gray(const Mat& bgr)
+// 가장자리 처리는 경계복제(replicate). 좌표 클램프.
+inline int clampi(int v, int lo, int hi) { return max(lo, min(hi, v)); }
+
+// BGR -> Gray (직접 변환: ITU-R BT.601 근사)
+static Mat bgr2gray_manual(const Mat& src)
 {
-    Mat g(bgr.size(), CV_8UC1);
-    for (int y = 0; y < bgr.rows; ++y)
+    Mat g(src.size(), CV_8UC1);
+    for (int y = 0; y < src.rows; ++y)
     {
-        const Vec3b* sp = bgr.ptr<Vec3b>(y);
+        const Vec3b* sp = src.ptr<Vec3b>(y);
         uint8_t* gp = g.ptr<uint8_t>(y);
-        for (int x = 0; x < bgr.cols; ++x) gp[x] = gray_from_bgr(sp[x]);
+        for (int x = 0; x < src.cols; ++x)
+        {
+            float B = sp[x][0], G = sp[x][1], R = sp[x][2];
+            int Y = (int) round(0.114f * B + 0.587f * G + 0.299f * R);
+            gp[x] = (uint8_t) min(255, max(0, Y));
+        }
     }
     return g;
 }
 
-// replicate-border accessor
-static inline uint8_t at_rep(const Mat& g, int y, int x)
+// Gray Erode: 윈도 내 최소값
+static Mat erodeGray(const Mat& src, int kH, int kW)
 {
-    y = max(0, min(g.rows - 1, y));
-    x = max(0, min(g.cols - 1, x));
-    return g.ptr<uint8_t>(y)[x];
-}
-
-static Mat erode_gray(const Mat& g, int k)
-{
-    int r = k / 2;
-    Mat out(g.size(), CV_8UC1);
-    for (int y = 0; y < g.rows; ++y)
+    CV_Assert(src.type() == CV_8UC1);
+    Mat dst(src.size(), CV_8UC1);
+    int ah = kH / 2, aw = kW / 2;
+    for (int y = 0; y < src.rows; ++y)
     {
-        uint8_t* op = out.ptr<uint8_t>(y);
-        for (int x = 0; x < g.cols; ++x)
+        uint8_t* dp = dst.ptr<uint8_t>(y);
+        for (int x = 0; x < src.cols; ++x)
         {
             int mn = 255;
-            for (int dy = -r; dy <= r; ++dy)
-                for (int dx = -r; dx <= r; ++dx)
-                    mn = min(mn, (int) at_rep(g, y + dy, x + dx));
-            op[x] = (uint8_t) mn;
+            for (int dy = -ah; dy <= ah; ++dy)
+            {
+                int yy = clampi(y + dy, 0, src.rows - 1);
+                const uint8_t* sp = src.ptr<uint8_t>(yy);
+                for (int dx = -aw; dx <= aw; ++dx)
+                {
+                    int xx = clampi(x + dx, 0, src.cols - 1);
+                    mn = min(mn, (int) sp[xx]);
+                }
+            }
+            dp[x] = (uint8_t) mn;
         }
     }
-    return out;
+    return dst;
 }
 
-static Mat dilate_gray(const Mat& g, int k)
+// Gray Dilate: 윈도 내 최대값
+static Mat dilateGray(const Mat& src, int kH, int kW)
 {
-    int r = k / 2;
-    Mat out(g.size(), CV_8UC1);
-    for (int y = 0; y < g.rows; ++y)
+    CV_Assert(src.type() == CV_8UC1);
+    Mat dst(src.size(), CV_8UC1);
+    int ah = kH / 2, aw = kW / 2;
+    for (int y = 0; y < src.rows; ++y)
     {
-        uint8_t* op = out.ptr<uint8_t>(y);
-        for (int x = 0; x < g.cols; ++x)
+        uint8_t* dp = dst.ptr<uint8_t>(y);
+        for (int x = 0; x < src.cols; ++x)
         {
             int mx = 0;
-            for (int dy = -r; dy <= r; ++dy)
-                for (int dx = -r; dx <= r; ++dx)
-                    mx = max(mx, (int) at_rep(g, y + dy, x + dx));
-            op[x] = (uint8_t) mx;
+            for (int dy = -ah; dy <= ah; ++dy)
+            {
+                int yy = clampi(y + dy, 0, src.rows - 1);
+                const uint8_t* sp = src.ptr<uint8_t>(yy);
+                for (int dx = -aw; dx <= aw; ++dx)
+                {
+                    int xx = clampi(x + dx, 0, src.cols - 1);
+                    mx = max(mx, (int) sp[xx]);
+                }
+            }
+            dp[x] = (uint8_t) mx;
         }
     }
-    return out;
+    return dst;
 }
 
-static Mat opening_gray(const Mat& g, int k)
-{
-    Mat e = erode_gray(g, k);
-    return dilate_gray(e, k);
-}
+static Mat opening(const Mat& src, int kH, int kW) { return dilateGray(erodeGray(src, kH, kW), kH, kW); } // A∘B=(A⊖B)⊕B :contentReference[oaicite:6]{index=6}
+static Mat closing(const Mat& src, int kH, int kW) { return erodeGray(dilateGray(src, kH, kW), kH, kW); } // A∙B=(A⊕B)⊖B :contentReference[oaicite:7]{index=7}
 
-static Mat closing_gray(const Mat& g, int k)
+int main()
 {
-    Mat d = dilate_gray(g, k);
-    return erode_gray(d, k);
-}
+    filesystem::create_directories(OUT_DIR);
 
-static vector<int> parse_ksizes(const string& s)
-{
-    vector<int> ks;
-    string tmp; stringstream ss(s);
-    while (getline(ss, tmp, ','))
+    Mat A_srcColor = imread(INPUT_PATH_1, IMREAD_COLOR);
+    imshow("A_original", A_srcColor);
+
+    Mat A_src = bgr2gray_manual(A_srcColor);
+
+    vector<pair<int, int>> A_sizes = { {3,3}, {5,5}, {9,9} };
+    for (auto [kh, kw] : A_sizes)
     {
-        if (tmp.empty()) continue;
-        ks.push_back(stoi(tmp));
-    }
-    return ks;
-}
+        Mat A_op = opening(A_src, kh, kw);
+        Mat A_cl = closing(A_src, kh, kw);
 
-int main(int argc, char** argv)
-{
-    if (argc < 5)
+        imshow("A_opening_" + to_string(kh) + "x" + to_string(kw), A_op);
+        imshow("A_closing_" + to_string(kh) + "x" + to_string(kw), A_cl);
+
+        imwrite("A_" + OUT_DIR + "opening_" + to_string(kh) + "x" + to_string(kw) + ".png", A_op);
+        imwrite("A_" + OUT_DIR + "closing_" + to_string(kh) + "x" + to_string(kw) + ".png", A_cl);
+    }
+
+    Mat B_srcColor = imread(INPUT_PATH_2, IMREAD_COLOR);
+    imshow("B_original", B_srcColor);
+
+    Mat B_src = bgr2gray_manual(B_srcColor);
+
+    vector<pair<int, int>> B_sizes = { {3,3}, {5,5}, {9,9} };
+    for (auto [kh, kw] : B_sizes)
     {
-        cerr << "Usage: " << argv[0] << " input.jpg out_prefix op ksize_list\n";
-        return 1;
+        Mat B_op = opening(B_src, kh, kw);
+        Mat B_cl = closing(B_src, kh, kw);
+
+        imshow("B_opening_" + to_string(kh) + "x" + to_string(kw), B_op);
+        imshow("B_closing_" + to_string(kh) + "x" + to_string(kw), B_cl);
+
+        imwrite("B_" + OUT_DIR + "opening_" + to_string(kh) + "x" + to_string(kw) + ".png", B_op);
+        imwrite("B_" + OUT_DIR + "closing_" + to_string(kh) + "x" + to_string(kw) + ".png", B_cl);
     }
-    string in_path = argv[1];
-    string out_prefix = argv[2];
-    string op = argv[3];
-    vector<int> ks = parse_ksizes(argv[4]);
 
-    Mat src = imread(in_path, IMREAD_COLOR);
-    if (src.empty()) { cerr << "Failed to read: " << in_path << "\n"; return 2; }
-    Mat g = to_gray(src);
+    cout << "[완료] out2/ 에 결과 저장\n";
 
-    for (int k : ks)
-    {
-        if (k < 3 || (k % 2) == 0)
-        {
-            cerr << "Skip invalid ksize=" << k << " (must be odd >=3)\n";
-            continue;
-        }
-        Mat out;
-        if (op == "erode") out = erode_gray(g, k);
-        else if (op == "dilate") out = dilate_gray(g, k);
-        else if (op == "open") out = opening_gray(g, k);
-        else if (op == "close") out = closing_gray(g, k);
-        else { cerr << "Unknown op: " << op << "\n"; return 3; }
+    waitKey(0);
 
-        string out_path = out_prefix + "_" + op + "_k" + to_string(k) + ".png";
-        if (!imwrite(out_path, out)) { cerr << "Failed to write: " << out_path << "\n"; return 4; }
-        cout << "Saved: " << out_path << "\n";
-    }
     return 0;
 }

@@ -1,51 +1,98 @@
-# 허프 변환(Hough Transform) 실험 보고서
+## Hough Transform 실험 보고서 2020203090 한용옥
+<br>
 
-## 1) 이론 요약
-허프 변환은 에지(밝기 변화가 큰 지점)로부터 직선을 검출하는 대표적 누적 투표(accumulator voting) 방식이다. 직선 $x\cos\theta + y\sin\theta = \rho$의 매개변수 $(\rho,\theta)$ 공간에서, 영상의 각 에지 픽셀 $(x_i,y_i)$은 $\rho = x_i\cos\theta + y_i\sin\theta$ 곡선을 만든다. 여러 픽셀이 공통 직선을 공유하면 같은 $(\rho,\theta)$ 좌표에 표가 집중되어 피크가 형성되고, 해당 피크가 검출된 직선이 된다.
+### 1. 파라미터 설명
 
-## 2) 파라미터 정의와 의미
-- **에지 임계값 `edge_thresh`**: Sobel로 계산한 $|G_x|+|G_y|$ 크기를 이 값 이상일 때만 에지로 채택한다. 값이 낮을수록 잡음/약한 에지도 포함되고, 높을수록 강한 에지만 남는다.
-- **$\theta$ 분할 수 `theta_bins`**: 각도 해상도. 값이 클수록 더 다양한 기울기의 직선을 구분하지만, 연산량과 누적 버킷 희석이 증가한다.
-- **$\rho$ 분할 수 `rho_bins`**: 거리 해상도. 영상 대각선 길이 $\rho_{\max}$를 기준으로 $[-\rho_{\max},\rho_{\max}]$를 균등 분할한다. 너무 작으면 동일 직선들이 같은 버킷에 섞여 정밀도가 낮아지고, 너무 크면 피크가 분산되어 검출이 어려워진다.
-- **누적 임계값 `acc_thresh`**: 투표 수가 이 값 이상인 버킷만 직선 후보로 채택한다. 낮추면 약한 직선까지, 높이면 강한 직선만 검출된다.
-- **`min_len`, `max_gap`(확률적 방식 유사 파라미터)**: 동일한 $(\rho,\theta)$에서 라인 위로 샘플링한 에지 히트들을 **최대 간격 `max_gap`** 기준으로 묶어 세그먼트를 만들고, 길이가 **`min_len`** 이상인 세그먼트만 선분으로 그린다. 이는 OpenCV의 `HoughLinesP`의 `minLineLength`, `maxLineGap`에 상응하는 개념이다.
+|||
+|:--:|:--:|
+|**rho**|누산기의 $\rho$ 해상도(픽셀). 일반적으로 1 사용.|
+|**theta**|각도 해상도(라디안). 보고서/코드에서는 $1^\circ$(≈0.01745rad).|
+|**threshold**|누적표 임계치. 이 값 이상 표를 받은 버킷만 선분 후보가 된다. <br> 값이 낮으면 약한 선도 검출되나 오검출↑, 높으면 강한 선만 남는다. |
+|**minLineLength**|선분의 최소 길이(픽셀). 짧은 단편 라인을 거른다.|
+|**maxLineGap**|끊긴 에지들을 같은 선분으로 묶어줄 최대 간격(픽셀). <br> 값을 키우면 단속 라인이 이어짐(연결력↑) vs 오연결 위험↑. |
+|**Canny (low, high, aperture)**|에지 민감도 조절. low/high를 낮추면 약선/노이즈 모두↑, 높이면 강선 위주로 안정화.|
 
-## 3) 구현 개요
-- **에지 검출**: 3×3 Sobel 마스크로 $|G_x|+|G_y|$ 계산 후 임계값으로 이진화. (직접 구현)
-- **표 누적**: $\theta$를 `theta_bins`로 균등 분할, 각 에지 픽셀에 대해 $\rho$를 계산해 정수 버킷에 투표.
-- **피크 선택**: 누적표가 `acc_thresh` 이상인 버킷을 직선 후보로 선택.
-- **세그먼트 추출**: 각 후보 $(\rho,\theta)$에 대해 선 방향으로 픽셀을 1픽셀 간격으로 샘플링하며, 에지 존재 위치를 `max_gap`을 넘어 끊어지지 않는 구간 단위로 묶고 길이가 `min_len` 이상이면 선분으로 출력(브레젠험 라인 그리기).
+### 2. 실험 방법
+**데이터**: 동일 원본 이미지 1장  
+**고정/변동 설정**  
+  1) **threshold**: $\rho=1$, $\theta=1^\circ$, `minLineLength=30`, `maxLineGap=10`, `Canny(50,150,ap=3)` 고정.  
+     `threshold ∈ {30, 50, 80, 120}`로 변화.  
+  2) **minLineLength**: `threshold=50`, `maxLineGap=10` 고정.  
+     `minLineLength ∈ {10, 30, 60, 100}`로 변화.  
+  3) **maxLineGap**: `threshold=80`, `minLineLength=40` 고정.  
+     `maxLineGap ∈ {0, 5, 10, 20}`로 변화.  
+  4) **Preset-Weak**(약선 강조): Canny(30,90), `threshold=20`, `minLineLength=10`, `maxLineGap=20`.  
+  5) **Preset-Strong**(강선 위주): Canny(100,200), `threshold=120`, `minLineLength=80`, `maxLineGap=5`.
 
-모든 처리(에지, 허프 누적, 선분 그리기)는 OpenCV 고수준 함수 없이 수작업 구현하였고, 영상 입출력만 OpenCV를 사용하였다.
 
-## 4) 실험 설정
-- 입력 영상: 사용자 제공 이미지.
-- 기본 파라미터: `edge_thresh=100, theta_bins=180, rho_bins=0(자동), acc_thresh=120, min_len=30, max_gap=5`.
-- 실행 예시:
-  ```bash
-  ./hough input.jpg result --edge_thresh=120 --theta_bins=180 --acc_thresh=150 --min_len=40 --max_gap=5
-  ```
+|**Threshold 변경 실험 결과**||
+|:--:|:--:|
+|![](./out/sweep_T30_edges.png)|![](./out/sweep_T30_lines.png)|
+|(T=30, minL=30, gap=10, Canny 50/150)|(설정 동일)|
+|![](./out/sweep_T50_edges.png)|![](./out/sweep_T50_lines.png)|
+|(T=50)|(설정 동일)|
+|![](./out/sweep_T80_edges.png)|![](./out/sweep_T80_lines.png)|
+|(T=80)|(설정 동일)|
+|![](./out/sweep_T120_edges.png)|![](./out/sweep_T120_lines.png)|
+|(T=120)|(설정 동일)|
 
-생성 산출물:
-- `result_edges.png`: 에지 맵
-- `result_hough.png`: 검출 선분 오버레이
+|**minLineLength 변경 실험 결과**||
+|:--:|:--:|
+|![](./out/sweep_minL10_edges.png)|![](./out/sweep_minL10_lines.png)|
+|(minL=10, T=50, gap=10, Canny 50/150)|(설정 동일)|
+|![](./out/sweep_minL30_edges.png)|![](./out/sweep_minL30_lines.png)|
+|(minL=30)|(설정 동일)|
+|![](./out/sweep_minL60_edges.png)|![](./out/sweep_minL60_lines.png)|
+|(minL=60)|(설정 동일)|
+|![](./out/sweep_minL100_edges.png)|![](./out/sweep_minL100_lines.png)|
+|(minL=100)|(설정 동일)|
 
-## 5) 결과 요약(가이드)
-- `edge_thresh`를 낮추면 약한 라인과 잡음이 함께 증가 → `acc_thresh`를 다소 올리거나 `max_gap`을 줄이면 과검출을 억제.
-- `theta_bins`를 키우면 경사 구분력이 증가하나, 피크가 분산되어 `acc_thresh`를 낮춰야 할 수 있음.
-- `rho_bins`를 너무 작게 하면 서로 다른 라인이 합쳐져 위치 오차가 커지고, 너무 크게 하면 피크가 흩어져 누락 가능.
-- `min_len`을 키우면 단속적인 짧은 라인은 제거되고 장선 위주로 남음. `max_gap`을 키우면 끊어진 라인을 이어주지만 오검출(잘못된 연결) 위험이 커짐.
+|**maxLineGap 변경 실험 결과**||
+|:--:|:--:|
+|![](./out/sweep_gap0_edges.png)|![](./out/sweep_gap0_lines.png)|
+|(gap=0, T=80, minL=40, Canny 50/150)|(설정 동일)|
+|![](./out/sweep_gap5_edges.png)|![](./out/sweep_gap5_lines.png)|
+|(gap=5)|(설정 동일)|
+|![](./out/sweep_gap10_edges.png)|![](./out/sweep_gap10_lines.png)|
+|(gap=10)|(설정 동일)|
+|![](./out/sweep_gap20_edges.png)|![](./out/sweep_gap20_lines.png)|
+|(gap=20)|(설정 동일)|
 
-## 6) 과제 질의 응답 (Slide 30 기준)
-**질문 #1. 약한 Line까지 검출하려면? 장단점은?**  
-- 설정 예: `edge_thresh` **낮춤**, `acc_thresh` **낮춤**, `max_gap` **약간 높임**, `min_len` **낮춤**.  
-- 장점: 희미한 선분까지 포착.  
-- 단점: 잡음 에지/가짜 라인 급증 → 오검출 증가, 후처리 필요.
+|**Preset—Weak/Strong 변경 실험 결과**||
+|:--:|:--:|
+|![](./out/preset_weak_edges.png)|![](./out/preset_strong_edges.png)|
+|(Canny 30/90, T=20, minL=10, gap=20)|(Canny 100/200, T=120, minL=80, gap=5)|
+|![](./out/preset_weak_lines.png)|![](./out/preset_strong_lines.png)|
+|(동일 설정)|(동일 설정)|
 
-**질문 #2. 강한 Line만 검출하려면? 장단점은?**  
-- 설정 예: `edge_thresh` **상향**, `acc_thresh` **상향**, `min_len` **상향**, `max_gap` **축소**.  
-- 장점: 신뢰도 높은 굵은 라인만 남음.  
-- 단점: 희미하거나 부분적인 라인은 누락. 구조적으로 중요한 약선이 사라질 수 있음.
+<br><br><br><br><br><br><br><br><br><br><br><br>
 
-## 7) 참고 슬라이드
-- 에지와 Sobel, 허프 개념 및 매개변수 설명: 강의 슬라이드(Edge Detection/Line Detection) 참조.
+### 3.5 요약
+**threshold ↓**: 약한 에지까지 선분으로 많이 뜸. 텍스처나 노이즈도 선분화되어 짧은/조각난 라인 급증. 같은 설정에서 `minLineLength`가 낮으면 더 심하게 늘고, `maxLineGap`이 크면 여러 조각이 한 선으로 이어져 긴 선분처럼 보이기도 함
+**threshold ↑**: 누적표가 높은 곳만 통과해서 강한 구조선 위주로만 남음 배경 텍스처는 대부분 사라져 화면이 깨끗해지지만, 약한/부분 가려진 선은 누락 `maxLineGap`이 작으면 끊긴 구간에서 더 잘 끊김
+**minLineLength ↓**: 짧은 단편 라인까지 통과해 검출 개수 증가. 한 구조선이 여러 짧은 선분으로 **분절**되어 카운트만 늘어나는 경향 텍스처가 많은 영역에서 특히 복잡해 보임
+**minLineLength ↑**: 짧은 잡선이 정리되고 뼈대가 되는 긴 구조선만 남음 다만 실제로 짧게 드러나는 유효 선(예: 일부만 보이는 경계)은 함께 사라질 수 있음 
+**maxLineGap ↓(0~소)**: 단속 구간에서 쉽게 끊겨 여러 개의 짧은 선분으로 나뉨 보수적이라 오연결은 줄지만, 선의 연속성이 떨어짐
+**maxLineGap ↑**: 끊긴 에지를 잘 이어 길게 만들어 주므로 가려짐/노이즈가 있어도 한 줄로 합쳐짐 대신 서로 가까운 다른 에지까지 잘못 연결될 가능성이 커짐 
+**Preset-Weak(낮은 Canny, 낮은 threshold, 낮은 minL, 큰 gap)**: 약한 선·배경 텍스처까지 광범위 검출 결과 이미지가 풍부하지만 과검출/오연결이 두드러짐 후처리(ROI, 방향 필터, 평행성/직교성 제약)를 쓰면 품질이 좋아짐 
+**Preset-Strong(높은 Canny, 높은 threshold, 높은 minL, 작은 gap)**: 뚜렷한 구조선만 깔끔히 남음시각적으로 안정적이지만 희미한 윤곽이나 부분 선은 누락 조명 변화가 크면 놓치는 게 생김
+
+<br>
+
+### 4.1 **약한 Line까지 검출**하려면 어떻게 설정하나? 단점은?
+- **권장 설정 방향**:  
+  - Canny 임계 **낮춤**(예: 30/90) → 약한 에지도 유지.  
+  - Hough `threshold` **낮춤**(예: 20~40) → 적은 표에도 선분 채택.  
+  - `minLineLength` **낮춤**(예: 10~30) → 짧은 약선도 통과.  
+  - `maxLineGap` **상향**(예: 15~25) → 끊어진 약선을 이어줌.
+- **단점(트레이드오프)**: 잡음/텍스처가 **과검출**되기 쉽고, 잘못된 연결 증가. 후처리(ROI 제한, 방향/평행성 필터, 최소 교차 규칙 등) 없으면 품질 저하.
+
+<br>
+
+### 4.2 **강한 Line만 검출**하려면 어떻게 설정하나? 단점은?
+- **권장 설정 방향**:  
+  - Canny 임계 **상향**(예: 100/200) → 약한 에지 제거.  
+  - Hough `threshold` **상향**(예: 100~150) → 강한 직선만 채택.  
+  - `minLineLength` **상향**(예: 60~100) → 긴 구조선만 남김.  
+  - `maxLineGap` **축소**(예: 0~5) → 무리한 연결 방지.
+- **단점**: 희미하거나 부분적으로 가려진 중요 구조선이 **누락**. 실제 환경(조명 변화, 질감)에서 **재현성**이 떨어질 수 있음.
